@@ -1,0 +1,206 @@
+---
+title: "487 pset 2"
+author: "Henry Tran"
+output: html_document
+date: "2023-10-07"
+---
+
+```{r Problem 1-3}
+oj <- read.csv("oj.csv")
+```
+
+```{r Problem 4}
+#a
+library(ggplot2)
+
+#b
+logprice <- ggplot(oj, aes(week, log(price))) +
+  geom_boxplot()
+logprice
+
+#c
+logprice_sep <- ggplot(oj, aes(week, log(price))) +
+  geom_boxplot(aes(fill = brand))
+logprice_sep
+
+#d
+price <- ggplot(oj, aes(week, price)) +
+  geom_boxplot(aes(fill = brand))
+price
+
+#e
+#The log price gives us a visualization of percent change for each orange juice brand, whereas the boxplot with regular price shows us the distribution of price for each brand. I find that the regular, non-log(price) graph gives us a better representation of price. It's easier to interpret the distribution in dollar amounts than in % changes in dollar amounts.
+```
+
+```{r Problem 5}
+#a wtf
+lmove_lprice <- ggplot(oj) +
+  geom_point(aes(logmove, log(price), color=brand), alpha = 0.3)
+lmove_lprice
+
+#a.i. I was able to see the different brands on the graph now that it's color coordinated. I'm able to see which brand has a higher/lower % change in price as (logmove...)
+
+```
+
+```{r Problem 6}
+
+#a: regression
+oj <- na.omit(oj)
+reg <- lm(logmove ~ log(price), data = oj)
+summary(reg)
+
+#a: elasticity
+
+#The model does not fit very well, as R^2 comes out to around 0.2081. This means that 20.81% of the log quantity can be explained by log(price) when doing a regression. The elasticity comes out to be around -1.601, which is considered to be inelastic. A 1% increase in log quantity for these 3 orange juice brands would result in a 1.601% decrease in log price for orange juice in the oj dataset.
+
+#b
+reg_brand <- lm(logmove ~ log(price) + brand, data = oj)
+summary(reg_brand)
+
+# R^2 increases to 0.3941, meaning around 39.41% of log quantity can be explained by log price and brand name. The intercept, because you have to take into account multicolinearity, is representative of Dominick's. We can interpret the intercepts as they are (log(price) is statistically significant at  the 1% level, as are all the other intercepts). Taking the intercept value as example, for a 1 unit increase in Dominick's orange juice, there is a 10.828% increase in log price.
+
+#c
+reg_dummy <- lm(logmove ~ brand*log(price), data = oj)
+summary(reg_dummy)
+# The interaction term brand*log(price) gives insight on how the relationship between logmove and brand changes as log(price) changes.
+# The elasticities for each firm are as follows: Dominick's is -3.378, Minute Maid's is -2.489, and Tropicana's is -2.415. These elasticities make sense because if we take Dominick's for example, if there is a 1% increase in log price, the quantity of Dominick's moved decreases by 3.378%, and so on with Minute Maid and Tropicana.
+```
+
+```{r Problem 7}
+library(dplyr)
+
+# problem 7, html... being featured shifts demand curve out for the same amount for each brand
+
+# elasticities under feat... log(price) coef + log(price)*feat coef + feat*mm/trop
+# 7c: lm(log(move) ~ log(price)*feat*brand)
+
+#a
+feat_instore <- oj %>% 
+  group_by(brand) %>%
+  select(feat, price) %>%
+  summarize(mean_price = mean(price), mean_feat = mean(feat)) %>%
+  ungroup()
+feat_instore
+
+#Dominick's has a mean price of $1.735 and a mean feature rate of 0.257.  Minute Maid has a mean price of $2.241 and mean feature rate of 0.289. Tropicana has a mean price of $2.870 and a mean feature rate of 0.166.
+
+#b
+# We can assign a dummy variable for the feature variable, and let 0 be when the brand is not featured, and let 1 be when it's featured.
+
+lm_dummy <- lm(logmove ~ log(price) + brand + feat, data = oj)
+# summary(lm_dummy)
+
+#c
+lm_featsales <- lm(logmove ~ log(price)*feat + brand*feat, data = oj)
+summary(lm_featsales)
+
+#d
+lm_featall <- lm(logmove ~ log(price) + log(price)*feat + brand*feat , data = oj)
+summary(lm_featall)
+
+#d. elasticities
+# The elasticities are as follows:
+# Tropicana: -1.0526
+# Minute Maid: -1.74095
+# Dominick's: -2.31551
+
+#e
+lm_socio <- lm(logmove ~ log(price) + log(price)*INCOME + brand*INCOME, data = oj)
+summary(lm_socio)
+```
+
+
+
+```{r Problem 8}
+
+#a. The brand that had the most elastic demand was Dominick's, as shown in problems 6a-6c, and 7d. Dominick's elasticity had a greater magnitude compared to Tropicana and Minute Maid, which had elasticity values closer to 1 than those of Dominick's. The brand that appeared to be the least elastic was Tropicana, as shown in the regression summaries for problems 6a-6c. Tropicana's elasticities across these regressions had the closest values towards 1 over Minute Maid and Dominick's.
+
+#b. The average prices does give some good match ups with these insights, as Tropicana had the highest mean price, but the lowest mean feature, which could help explain why its elasticity is more inelastic than the other brands. Dominick's had the lowest mean price, while having the 2nd highest mean feat (0.257) vs. Minute Maid's (0.288).
+
+#c
+elasticity <- -3.13869
+dom_avg <- 1.735809
+mm_avg <- 2.241162
+trop_avg <- 2.870493
+
+#assume -1 to be the 1% increase in logmove to calculate % change for each brand
+change_price_dom <- -1 * dom_avg
+change_price_mm <- -1 * mm_avg
+change_price_trop <- -1 * trop_avg
+
+unitcost_dom <- dom_avg - change_price_dom
+unitcost_mm <- mm_avg - change_price_mm
+unitcost_trop <- trop_avg - change_price_trop
+
+unitcost_dom
+unitcost_mm
+unitcost_trop
+
+#The unit costs appear to be different (a lot higher than the mean prices for each brand). I assume that I must've had a mishap when determining back out unit costs, but this is what I think is correct. My insights are this: the prices are in line with what is intuitive, where Dominick's has the lowest unit cost, Minute Maid with the middle of the pack cost, and Tropicana being the most expensive.
+```
+```{r Problem 9}
+
+#a
+
+# I will be using the linear regression called lm_socio_demo from 7b
+
+lm_socio_demo <- lm(logmove ~ log(price) + brand + feat + EDUC + INCOME, data = oj)
+summary(lm_socio_demo)
+
+
+#b
+# Both Education and Income level significantly influence demand, as their absolute value T-values are extremely high (19.67 and 24.36 respectively).
+
+#c
+oj$logmove_hat <- predict(lm_socio_demo)
+n <- nrow(oj)
+
+fair_r2_socio <- (1-(n - 1)/(n - 7 - 1))
+fair_r2_socio
+
+fair_r2_without <- (1-(n - 1)/(n - 5 - 1))
+fair_r2_without
+
+# There is about a 0.06% difference between the R^2 for the regression with demographic variables than without.
+
+#d
+
+#antijoin for splitting data?
+
+#i. splitting into new df
+set.seed(123)
+sampled_rows <- 0.8 * nrow(oj)
+new_df <- oj %>% sample_n(sampled_rows)
+
+#with demo
+lm_newdf_demo <- lm(logmove ~ log(price) + brand + feat + EDUC + INCOME, data =  new_df)
+#no demo
+lm_newdf_no_demo <- lm(logmove ~ log(price) + brand + feat, data = new_df)
+
+#ii. constructing mse for both demo and non-demo lm
+
+#with demo mse
+new_df$predicted_demo <- predict(lm_newdf_demo)
+new_df$predicted_no_demo <- predict(lm_newdf_no_demo)
+
+mse_demo <- mean((new_df$logmove - new_df$predicted_demo)^2)
+mse_no_demo <- mean((new_df$logmove - new_df$predicted_no_demo)^2)
+
+mse_demo
+mse_no_demo
+
+#iii. comparing out of sample MSE
+
+# creating df for to run outside mse
+new_df$predicted_demo <- predict(lm_newdf_demo, newdata = new_df)
+new_df$predicted_no_demo <- predict(lm_newdf_no_demo, newdata = new_df)
+
+mse_demo_out <- mean((new_df$logmove - new_df$predicted_demo)^2)
+mse_no_demo_out <- mean((new_df$logmove - new_df$predicted_no_demo)^2)
+
+mse_demo_out
+mse_no_demo_out
+
+#im not sure how to do out of sample mse. I would assume that because the MSE is so low for the in sample MSE, that the out of sample would be higher than the in sample.
+```
+

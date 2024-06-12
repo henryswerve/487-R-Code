@@ -1,0 +1,121 @@
+---
+title: "PSET 6"
+author: "Henry Tran"
+date: "2023-11-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# setwd("C:/Users/danny/Desktop/487 r directory")
+library(randomForest)
+library(ggplot2)
+library(tidyverse)
+library(xgboost)
+oj <- read.csv("oj.csv")
+set.seed(487)
+```
+
+```{r Problem 1a-c}
+oj$price <- log(oj$price)
+
+#1a
+lasso_lm <- lm(logmove ~ price + brand*price + feat*price + price*ETHNIC + INCOME*price + HHLARGE*price + price*HVAL150 + price*SSTRDIST + price*SSTRVOL, data = oj)
+
+summary(lasso_lm)
+
+lasso.pred <- predict(lasso_lm)
+
+lasso_mse <- (oj$logmove - lasso.pred)^2
+
+lasso_mse <- mean(lasso_mse)
+
+cat("MSE for LASSO was ", lasso_mse, "\n")
+
+lasso_graph <- ggplot(data = oj, aes(x = logmove, y = lasso.pred)) +
+                     geom_point(alpha = 0.2, color = "orange") +
+                     geom_abline(intercept=0,slope=1, linetype ='dashed', color='blue') +
+                     labs(x = "Observed Price (logmove)", y = "Predicted Price (LASSO)") +
+                     ggtitle("Observed (logmove) vs. Predicted Price (LASSO)")
+
+oj.rf <- randomForest(logmove ~price + brand*price + feat*price + price*ETHNIC + INCOME*price + HHLARGE*price + price*HVAL150 + price*SSTRDIST + price*SSTRVOL, data = oj, ntree = 100, 
+                      keep.forest = TRUE)
+
+oj$pred_logmove_rf = predict(oj.rf)
+
+oj$resid2 <- (oj$logmove - oj$pred_logmove_rf)^2
+
+rf.mse <- mean(oj$resid2)
+
+#plot observed vs. predicted
+
+rf_graph <- ggplot(data = oj, aes(x = logmove, y = pred_logmove_rf)) +
+                  geom_point(alpha = 0.2, color = "blue") +
+                  geom_abline(intercept=0,slope=1, linetype ='dashed', color='red') +
+                  labs(x = "Observed Price (logmove)", y = "Predicted Price (RF)") +
+                  ggtitle("Observed (logmove) vs. Predicted Price (Random Forest)")
+
+#1b
+#plotted graphs
+lasso_graph
+rf_graph
+
+#1c
+#compare
+cat("The MSE for the random forest was", rf.mse, "whereas the MSE from the previous homework was", lasso_mse)
+```
+
+
+```{r Problem 2a-b}
+
+#2a and 2b
+#test and training set
+x <- as.matrix(oj[, ])
+y <- oj$logmove
+
+sample.2a <- sample(1:nrow(x), 0.8 * nrow(x), replace = FALSE)
+train <- oj[sample.2a,]
+test <- oj[-sample.2a ,]
+```
+
+```{r Problem 2c}
+
+#xgb matrix for test and train matrix
+
+#2c.i
+train_matrix <- model.matrix(formula('logmove ~ price + brand + store + week + feat + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), train)
+
+test_matrix <- model.matrix(formula('logmove ~ price + brand + store + week + feat + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), test)
+
+train_xgb <- xgb.DMatrix(data = train_matrix, label = train$logmove)
+
+test_xgb <- xgb.DMatrix(data = test_matrix, label = test$logmove)
+
+#2c.ii
+cv.xgb <- xgb.cv(data = train_xgb, nfold = 5, nrounds = 10000000, early_stopping_rounds = 10, print_every_n = 100)
+
+#2c.iii
+#root mean square error RMSE
+
+rmse_train <- cv.xgb$evaluation_log$train_rmse_mean[191]
+rmse_test <- cv.xgb$evaluation_log$test_rmse_mean[191]
+
+cat("The training RMSE came out to be", rmse_train, "and the testing RMSE came out to be", rmse_test)
+cat("Compared to the previous MSEs, the XGB MSE for train is", (rmse_train)^2, "and the XGB MSE for test is", (rmse_test)^2)
+#use xgboost to train model on full training data in 191 rounds
+
+#2.c.iv
+full.test <- xgboost(data = train_xgb, nrounds = 191)
+
+#2.c.v
+#use predict command on xgb.DMatrix (matrix)
+
+full.test.predicted <- predict(full.test, newdata = test_xgb)
+view(full.test.predicted)
+
+mse.xgb <- (getinfo(test_xgb, "label") - full.test.predicted)^2
+mse.xgb <- mean(mse.xgb)
+
+cat("The mse for the XGBoost model was", mse.xgb)
+```
+

@@ -1,0 +1,171 @@
+---
+title: 'Pset 7'
+author: "Henry Tran"
+date: "2023-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(xgboost)
+library(randomForest)
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(maptree)
+# oj <- read.csv("oj.use.csv")
+# setwd("C:/Users/danny/Desktop/487 r directory")
+oj <- read.csv("oj.csv")
+library(readxl)
+retail <- read_excel("online_retail.xlsx")
+```
+
+Problem 1a. Consumers that would prefer high quality products will be out of the market because the products they'd want aren't there.
+
+Problem 1b. They could offer both high and low quality goods to appease both types of consumers. They could also only offer only one type of good: only a high quality good or only a low quality good.
+
+Problem 1c. They'd pay as much to maximize their profits assuming that the firm is rational. The point in which they'd stop paying would be the cutoff point where their projection for the amount of money they'd make on identifying the market demographic is equal to the firm's cost to research.
+
+```{r Problem 2a Setting up the Lagged Variables}
+oj$log.price <- log(oj$price)
+
+df1 <- oj
+
+df1$week <- df1$week + 1
+
+df2 <- merge(oj, df1,
+             by = c("brand", "store", "week", "AGE60", "EDUC", "ETHNIC", "INCOME", "HHLARGE", "WORKWOM", "HVAL150", "SSTRDIST", "SSTRVOL", "CPDIST5", "CPWVOL5"))
+
+colnames(df2) <- sub("\\.x$", ".lagged", colnames(df2))
+colnames(df2) <- sub("\\.y$", ".current", colnames(df2))
+```
+
+```{r Problem 2a Setting up Training and Test sets}
+x <- as.matrix(df2[, ])
+
+sample.2 <- sample(1:nrow(x), 0.5 * nrow(x), replace = FALSE)
+xgb.df.fold1 <- df2[sample.2, ]
+xgb.df.fold2 <- df2[-sample.2, ]
+```
+
+```{r Problem 2a XGBoost for Fold 1 & 2}
+
+logmove.fold1 <- model.matrix(formula('logmove.current ~ log.price.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold1)
+
+price.fold1 <- model.matrix(formula('log.price.current ~ logmove.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold1)
+
+logmove.fold2 <- model.matrix(formula('logmove.current ~ log.price.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold2)
+
+price.fold2 <- model.matrix(formula('log.price.current ~ logmove.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold2)
+
+#train on fold 1 (og), and test on fold 2
+
+train_xgb.fold1 <- xgb.DMatrix(data = logmove.fold1, label = xgb.df.fold1$logmove.current)
+
+test_xgb.fold1 <- xgb.DMatrix(data = logmove.fold2, label = xgb.df.fold1$log.price.current)
+
+train_xgb.fold2 <- xgb.DMatrix(data = logmove.fold2, label = xgb.df.fold2$logmove.current)
+
+test_xgb.fold2 <- xgb.DMatrix(data = logmove.fold1, label = xgb.df.fold1$log.price.current)
+
+cv.xgb.1 <- xgb.cv(data = train_xgb.fold1, nfold = 5, nrounds = 10000000, early_stopping_rounds = 10, print_every_n = 100)
+cat("For the prediction for fold1, we will use", cv.xgb.1$best_iteration, "rounds to train this fold (1)")
+
+cv.xgb.2 <- xgb.cv(data = train_xgb.fold2, nfold = 5, nrounds = 10000000, early_stopping_rounds = 10, print_every_n = 100)
+cat("For the prediction for fold2, we will use", cv.xgb.2$best_iteration, "rounds to train this fold (2)")
+```
+
+```{r Problem 2a Prediction}
+full.test.fold1 <- xgboost(data = train_xgb.fold1, nrounds = cv.xgb.1$best_iteration, print_every_n = 100)
+
+full.test.fold2 <- xgboost(data = train_xgb.fold2, nrounds = cv.xgb.2$best_iteration, print_every_n = 100)
+
+predicted.1 <- predict(full.test.fold1, newdata = test_xgb.fold2)
+
+predicted.2 <- predict(full.test.fold2, newdata = test_xgb.fold1)
+
+log.price.resid <- df2$log.price.current - predicted.1
+
+logmove.resid <- df2$logmove.current - predicted.2
+
+resid.combined <- rbind(log.price.resid, logmove.resid)
+
+resid.combined <- t(resid.combined)
+
+resid.combined <- na.omit(resid.combined)
+
+sampled.df.combined <- rbind(xgb.df.fold1, xgb.df.fold2)
+
+ols.df <- cbind(sampled.df.combined, resid.combined)
+```
+
+```{r Problem 2a OLS}
+logprice.ols <- lm(log.price.resid ~ logmove.resid + logmove.resid*brand + logmove.resid*feat.lagged + brand + brand*feat.lagged + EDUC + AGE60 + ETHNIC + INCOME + ETHNIC * INCOME * AGE60, data = ols.df)
+summary(logprice.ols)
+
+logmove.ols <- lm(logmove.resid ~ log.price.resid + log.price.resid*brand + log.price.resid*feat.lagged + brand + brand*feat.lagged + EDUC + AGE60 + ETHNIC + INCOME + ETHNIC * INCOME * AGE60, data = ols.df)
+summary(logmove.ols)
+```
+
+```{r Problem 2b 3x3 Matrix}
+
+#dont include
+df_trop <- ols.df$brand == "tropicana"
+
+df_trop <- ols.df[df_trop, ]
+
+df_mm <- ols.df$brand == "minute.maid"
+
+df_mm <- ols.df[df_mm, ]
+
+df_dom <- ols.df$brand == "dominicks"
+
+df_dom <- ols.df[df_dom, ]
+
+df_combined <- df_trop
+
+df_combined$logmove.resid.mm <- df_mm$logmove.resid
+df_combined$logmove.resid.dom <- df_dom$logmove.resid
+
+trop_reg <- lm(logmove.resid ~ logmove.resid.mm + logmove.resid.dom, data = df_combined)
+reg_mm <- lm(logmove.resid.mm ~ logmove.resid + logmove.resid.dom, data = df_combined)
+reg_dom <- lm(logmove.resid.dom ~ logmove.resid + logmove.resid.mm, data = df_combined)
+summary(trop_reg) #1trop 2mm 3 dom
+summary(reg_mm) #2trop 1mm 3 dom
+summary(reg_dom) #2trop 3mm 1 dom
+
+trop_elast <- c(summary(trop_reg)$coefficients[1], summary(reg_mm)$coefficients[2], summary(reg_dom)$coefficients[2])
+mm_elast <- c(summary(trop_reg)$coefficients[1], summary(reg_mm)$coefficients[1], summary(reg_dom)$coefficients[3])
+dom_elast <- c(summary(trop_reg)$coefficients[3], summary(reg_mm)$coefficients[3], summary(reg_dom)$coefficients[1])
+
+matrix_elasticity <- rbind(trop_elast, mm_elast, dom_elast)
+print(matrix_elasticity)
+```
+
+```{r Clean data pset8}
+```
+
+
+```{r Problem 1 RF in double ML}
+
+oj_tree <- oj %>% 
+  mutate(q = exp(logmove)) %>% 
+  group_by(store, week) %>% 
+  mutate(weighted_mean = weighted.mean(price, q)) %>% 
+  ungroup()
+
+reg_tree_data <- oj_tree %>% 
+  select(weighted_mean, AGE60:CPWVOL5)
+
+show_tree <- function(cp_val){
+  fit<-rpart(as.formula(weighted_mean ~ .),
+           data=reg_tree_data,
+           method="anova",
+           cp=cp_val)
+  
+  draw.tree(fit)
+}
+
+show_tree(.004)
+```
+

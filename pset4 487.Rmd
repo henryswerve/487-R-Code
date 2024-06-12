@@ -1,0 +1,353 @@
+---
+title: "487 PSET 4"
+author: "Henry Tran"
+date: "2023-10-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Problem 1a}
+library(permute)
+library(maptree)
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+library(broom)
+library(tidyverse)
+library(glmnet)
+library(knitr)
+
+
+setwd("C:/Users/danny/Desktop/487 r directory")
+oj <- read.csv("oj.csv")
+```
+
+```{r Problem 1b}
+set.seed(487)
+
+#set up the df
+oj_id <- oj %>%
+  mutate(log_price = log(price)) %>%
+  arrange(week) %>% # sort the data by week
+  group_by(store, brand) %>% # only lag within a store and brand
+  mutate(lag_price = ifelse(lag(week) + 1 == week, lag(log_price), NA)) %>% # calculate lagged prices only if subsequent weeks
+  ungroup() %>%
+  filter(!is.na(lag_price)) %>%  # remove observations without a lagged price
+  mutate(dataset_id = sample(
+           rep(c(1:5), ceiling(n()/5)),
+           size = n(),
+           replace = FALSE
+         ))
+
+#assign x to be all other variables we want to regress y on. This is for problem 1c
+x <- as.matrix(oj_id[, !(colnames(oj_id) %in% c("AGE60", "WORKWOM"))])
+# na.omit(x)
+
+#assign y to be log move. 
+y <- oj_id$logmove
+y <- as.matrix(y)
+
+#create training + test set
+train <- sample(1:nrow(x), 0.8 * nrow(x), replace = FALSE)
+
+# from class
+x.1 <- as.matrix(oj_id[, 5:20])
+
+y.1 <- as.numeric(as.matrix(oj_id[, 4]))
+# y.1 <- as.matrix(y.1) is this even necessary?
+```
+
+```{r Problem 1c}
+set.seed(487)
+
+#from class
+lasso.test <- glmnet(x.1, y.1, alpha = 1)
+lasso.test.cv <- cv.glmnet(x.1, y.1, alpha = 1)
+plot(lasso.test.cv)
+
+cvfit <- cv.glmnet(x.1, y.1, alpha = 1)
+plot(cvfit)
+cvfit$lambda.min
+log(cvfit$lambda.min)
+coef(cvfit, s = "lambda.min")
+
+mse_1c <- cvfit$lambda.min
+# From the LASSO, the model does not kick out any coefficients, but deems CPDIST5, CPWVOL5 and SSTRDIST to be have lowest coefficient values by LASSO.
+# There are 17 variables vs. 28008 observations. Having smaller number of variables may lead to less overfitting as there are less variables that can help explain the variability within the test set.
+```
+
+
+```{r Problem 1d}
+set.seed(487)
+lasso_1d <- glmnet(x[train, ], y[train], alpha = 1)
+lasso_1d_cv <- cv.glmnet(x[train, ], y[train], alpha = 1)
+
+lasso.pred <- predict(lasso_1d, s = lasso_1d_cv$lambda.min, newx = x[-train, ])
+lasso.mse <- mean((lasso.pred - y[-train])^2)
+lasso.mse #super low... 0.0008771472
+cat("The mse for out of sample LASSO was", lasso.mse, "while the mse for the in-sample LASSO from 1c was", mse_1c, "Compared to the last problem set, the MSE was around 0.34, where as mine was around", lasso.mse, ". Although this MSE is significantly lower, I believe that OOS MSE when utilizing LASSO should yield a smaller OOS MSE than from the previous problem set")
+```
+
+Problem 1e.
+
+By using LASSO, the model is systematically using a formula in order to choose variables that will be shrunk to 0, deeming them unimportant when running LASSO. I used my intuition as an economist when choosing socioeconomic variables for the model, while LASSO chooses variables by penalizing them with lambda.
+
+
+```{r Problem 2a}
+# Because LASSO did not "kick" out any variables, I will choose to omit the variables with the lowest magnitudes: CPDIST5, CPWVOL5 and SSTRDIST.
+
+reg_2a <- lm(logmove ~ log_price + lag_price + feat + price + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRVOL + brand*log_price + price*lag_price + brand*feat, data = oj_id)
+summary(reg_2a)
+```
+
+Problem 2a.i.
+
+When the lagged price for Dominick's is $1, the predicted elasticity is around (1.0429 + -0.2328 = 0.8101). This elasticity is inelastic, as it is close to 1. Lagged price impacts the price elasticity of this period.
+
+Problem 2a.ii.
+
+For Tropicana, the predicted elasticity is around (-4.343 + -0.2382 = -4.5812). This elasticity is extremely elastic, as its magnitude is > 1. Because this predicted elasticity impacts log move this period, this means that for a 1% increase in log_price the current week for Tropicana, there will be a -4.5812% decrease in Tropicana's log_price the week after.
+
+Problem 2a.iii.
+
+When Tropicana is featured, the predicted elasticity is around (0.847 + -0.378 = 0.469). This elasticity is inelastic, as it is close to 0. For a 1% increase in brands featured this week, Tropicana will increase by 0.469% in log_move for that week.
+
+Problem 2a.iv.
+
+```{r Problem 2a iv.}
+ci_trop <-confint(reg_2a, "brandtropicana", level = 0.90, oj_id)
+cat("The 95% CI for Tropicana is", ci_trop)
+```
+
+
+```{r Problem 3a}
+wide_data <- oj_id %>% 
+  select(store, week, brand, log_price, ETHNIC, EDUC, INCOME, HHLARGE, WORKWOM, HVAL150, AGE60, lag_price, price, feat) %>% 
+  pivot_wider(
+    id_cols = c(store, week, ETHNIC, EDUC, INCOME, HHLARGE, WORKWOM, HVAL150, AGE60, lag_price, price, feat), 
+    names_from = brand, 
+    values_from=log_price
+  )
+
+cross_price_data <- oj_id %>% 
+  select(store, week, logmove, brand, ETHNIC, EDUC, INCOME, HHLARGE, WORKWOM, HVAL150, lag_price, price) %>% 
+  left_join(wide_data,
+            by = c('store', 'week', 'ETHNIC', 'EDUC', 'INCOME', 'HHLARGE', 'WORKWOM', 'HVAL150', 'lag_price', 'price'))
+```
+
+```{r Problem 3b.i}
+
+library(plyr)
+#4a
+df_4 <- ddply(oj_id, c('price', 'logmove'), function(x) c(weighted_price = weighted.mean(x$price, x$logmove)))
+
+#4b
+
+merged_oj_id <- right_join(oj_id, df_4, by = c('price', 'logmove'))
+df_trop <- filter(merged_oj_id, merged_oj_id$brand == "tropicana")
+df_mm <- filter(merged_oj_id, merged_oj_id$brand == "minute.maid")
+df_dom <- filter(merged_oj_id, merged_oj_id$brand == "dominicks")
+
+df_combined <- df_trop
+df_combined$logmove_dom <- df_dom$logmove
+df_combined$logprice_mm <- df_mm$log_price
+df_combined$logmove_mm <- df_mm$logmove
+df_combined$logprice_dom <- df_dom$log_price
+
+df_combined <- df_combined %>% select(logprice_dom, logmove_dom, logprice_dom, logmove_dom, logprice_mm, logmove_mm, feat, EDUC, ETHNIC, INCOME, HHLARGE, WORKWOM, HVAL150, SSTRDIST, SSTRVOL, CPDIST5, CPWVOL5)
+
+empty_1 <- vector("numeric", nrow(df_combined))
+empty_2 <- vector("numeric", nrow(df_combined))
+
+trop_log_price <- df_trop$log_price
+trop_logmove <- df_trop$logmove
+
+df_combined <- cbind(trop_log_price, trop_logmove, df_combined)
+colnames(df_combined)
+
+reg_a <- lm(logmove_mm ~ trop_log_price + logprice_mm + logprice_dom + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+reg_b <- lm(logmove_dom ~ trop_log_price + logprice_mm + logprice_dom + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+reg_c <- lm(trop_logmove ~ trop_log_price + logprice_mm + logprice_dom + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+summary(reg_a)
+
+trop_elast_3bi <- c(summary(reg_a)$coefficients[2], summary(reg_a)$coefficients[3], summary(reg_a)$coefficients[4])
+mm_elast_3bi <- c(summary(reg_b)$coefficients[2], summary(reg_b)$coefficients[3], summary(reg_b)$coefficients[4])
+dom_elast_3bi <- c(summary(reg_c)$coefficients[2], summary(reg_c)$coefficients[3], summary(reg_c)$coefficients[4])
+
+matrix_elast_3bi <- rbind(trop_elast_3bi, mm_elast_3bi, dom_elast_3bi)
+matrix_elast_3bi
+```
+
+
+```{r Problem 3b.ii}
+reg_1 <- lm(logmove_mm ~ trop_log_price*feat + logprice_mm*feat + logprice_dom*feat + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+reg_2 <- lm(logmove_dom ~ trop_log_price*feat + logprice_mm*feat + logprice_dom*feat + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+reg_3 <- lm(trop_logmove ~ trop_log_price*feat + logprice_mm*feat+ logprice_dom*feat + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5, data = df_combined)
+summary(reg_3)
+
+trop_elast <- c(summary(reg_1)$coefficients[2], summary(reg_1)$coefficients[4], summary(reg_1)$coefficients[5])
+mm_elast <- c(summary(reg_2)$coefficients[2], summary(reg_2)$coefficients[4], summary(reg_2)$coefficients[5])
+dom_elast <- c(summary(reg_3)$coefficients[2], summary(reg_3)$coefficients[4], summary(reg_3)$coefficients[5])
+
+matrix_elast_feat <- rbind(trop_elast, mm_elast, dom_elast)
+
+#[,1] is tropicana, [,2] is mm, [,3] is dom
+matrix_elast_feat
+```
+
+Problem 3.b.i
+
+The cross-price elasticity for tropicana, while being considered elastic, decreases from 1.126 while featured to 0.998 when feat is not a variable regressed on logmove.
+
+The cross-price elasticity for minute maid, while fairly elastic, decreases slightly at around 1.335 when featured and at around 1.305 when unfeatured.
+
+Lastly, the cross-price elasticity for dominicks, while being fairly inelastic, increases from 0.1078 when featured to around 0.201 when unfeatured.
+
+Problem 3.b.ii
+
+Tropicana, when minute maid is featured, suffers the most, since its cross-price elasticity is around -3.981, while suffering the most when not featured as well.
+
+Problem 3.c.i
+
+Dominick's and Minute Maid appears to be the most competitive, as its cross-price elasticities with minute maid is the most inelastic between the three (at around [0.107, 0.312]).
+
+Problem 3.c.ii
+
+We can expect that correlation between Dominick's and Minute Maid to be positively correlated with each other. If Dominick's were to decrease price, Minute Maid would also have to decrease their price in order to remain competitive, or else lose out on sales.
+
+```{r Problem 4a. and 4b}
+
+#this code is repeated for credit. i ran this in the previous question in order to get an matrix that worked
+#library(plyr)
+#4a
+#df_4 <- ddply(oj_id, c('price', 'logmove'), function(x) c(weighted_price = weighted.mean(x$price, x$logmove)))
+
+#4b
+#merged_oj_id <- right_join(oj_id, df_4, by = c('price', 'logmove'))
+```
+
+```{r Problem 5a}
+
+reg_5a <- lm(weighted_price ~ logmove + log_price + lag_price + feat + price + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + 
+               HVAL150 + SSTRVOL, data =merged_oj_id)
+
+summary(reg_5a)
+```
+
+```{r Problem 5b-c}
+dataToPass <- merged_oj_id[,c("brand", "weighted_price", "price", "log_price", "feat", "logmove", "AGE60","EDUC","ETHNIC","INCOME","HHLARGE","WORKWOM","HVAL150","SSTRDIST","SSTRVOL","CPDIST5","CPWVOL5")]
+fit <- rpart(as.formula(weighted_price ~ AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5), data = dataToPass, method = "anova", cp = 0.002)
+summary(fit)
+#5c
+draw.tree(fit)
+```
+
+```{r Problem 5d}
+dataToPass$leaf = fit$where
+
+leaf1 <- dataToPass[dataToPass$leaf == "2", ]
+leaf2 <- dataToPass[dataToPass$leaf == "4", ]
+leaf3 <- dataToPass[dataToPass$leaf == "5", ]
+```
+
+```{r Problem 6a and b i.-iii.}
+df_6a_trop <- rbind(leaf1[leaf1$brand == "tropicana", ],
+                 leaf2[leaf2$brand == "tropicana", ],
+                 leaf3[leaf3$brand == "tropicana", ])
+
+df_6a_mm <- rbind(leaf1[leaf1$brand == "minute.maid", ],
+                 leaf2[leaf2$brand == "minute.maid", ],
+                 leaf3[leaf3$brand == "minute.maid", ])
+
+df_6a_dom <- rbind(leaf1[leaf1$brand == "dominicks", ],
+                 leaf2[leaf2$brand == "dominicks", ],
+                 leaf3[leaf3$brand == "dominicks", ])
+
+test_df_6a_trop <- df_6a_trop
+test_df_6a_trop$logmove_dom <- df_dom$logmove
+test_df_6a_trop$logprice_mm <- df_mm$log_price
+test_df_6a_trop$logmove_mm <- df_mm$logmove
+test_df_6a_trop$logprice_dom <- df_dom$log_price
+test_df_6a_trop$logmove_trop <- df_trop$logmove
+test_df_6a_trop$logprice_trop <- df_trop$log_price
+
+
+test_df_6a_mm <- df_6a_mm
+test_df_6a_mm$logmove_dom <- df_dom$logmove
+test_df_6a_mm$logprice_mm <- df_mm$log_price
+test_df_6a_mm$logmove_mm <- df_mm$logmove
+test_df_6a_mm$logprice_dom <- df_dom$log_price
+test_df_6a_mm$logmove_trop <- df_trop$logmove
+test_df_6a_mm$logprice_trop <- df_trop$log_price
+
+test_df_6a_dom <- df_6a_dom
+test_df_6a_dom$logmove_dom <- df_dom$logmove
+test_df_6a_dom$logprice_mm <- df_mm$log_price
+test_df_6a_dom$logmove_mm <- df_mm$logmove
+test_df_6a_dom$logprice_dom <- df_dom$log_price
+test_df_6a_dom$logmove_trop <- df_trop$logmove
+test_df_6a_dom$logprice_trop <- df_trop$log_price
+
+#for tropicana df only
+reg_trop_1 <- glm(logmove_dom ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_trop)
+reg_trop_2 <- glm(logmove_trop ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_trop)
+reg_trop_3 <- glm(logmove_mm ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_trop)
+summary(reg_trop_1)
+
+tropicana_elasticity_feat_6a <- c(summary(reg_1)$coefficients[6], summary(reg_1)$coefficients[7], summary(reg_1)$coefficients[8])
+tropicana_elasticity_feat_6a.ii <- c(summary(reg_2)$coefficients[6], summary(reg_2)$coefficients[7], summary(reg_2)$coefficients[8])
+tropicana_elasticity_feat_6a.iii <- c(summary(reg_3)$coefficients[6], summary(reg_3)$coefficients[7], summary(reg_3)$coefficients[8])
+
+
+#for minute maid df only
+
+reg_mm_1 <- glm(logmove_dom ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_mm)
+reg_mm_2 <- glm(logmove_trop ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_mm)
+reg_mm_3 <- glm(logmove_mm ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_mm)
+summary(reg_mm_1)
+
+mm_elasticity_feat_6a <- c(summary(reg_1)$coefficients[6], summary(reg_1)$coefficients[7], summary(reg_1)$coefficients[8])
+mm_elasticity_feat_6a.ii <- c(summary(reg_1)$coefficients[6], summary(reg_2)$coefficients[7], summary(reg_2)$coefficients[8])
+mm_elasticity_feat_6a.iii <- c(summary(reg_1)$coefficients[6], summary(reg_3)$coefficients[7], summary(reg_3)$coefficients[8])
+
+#for dominicks df only
+
+reg_dom_1 <- glm(logmove_dom ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_dom)
+reg_dom_2 <- glm(logmove_trop ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_dom)
+reg_dom_3 <- glm(logmove_mm ~ logprice_dom*feat + logprice_trop*feat + logprice_mm*feat, data = test_df_6a_dom)
+summary(reg_dom_1)
+
+dom_elasticity_feat_6a <- c(summary(reg_1)$coefficients[6], summary(reg_1)$coefficients[7], summary(reg_1)$coefficients[8])
+dom_elasticity_feat_6a.ii <- c(summary(reg_2)$coefficients[6], summary(reg_2)$coefficients[7], summary(reg_2)$coefficients[8])
+dom_elasticity_feat_6a.iii <- c(summary(reg_3)$coefficients[6], summary(reg_3)$coefficients[7], summary(reg_3)$coefficients[8])
+
+
+# matrix_elast_trop <- rbind(trop_elast_3bi, mm_elast_3bi, dom_elast_3bi)
+# matrix_elast_mm
+matri_elast_trop <- rbind(tropicana_elasticity_feat_6a, mm_elasticity_feat_6a, dom_elasticity_feat_6a)
+matri_elast_mm <- rbind(tropicana_elasticity_feat_6a.ii, mm_elasticity_feat_6a.ii, dom_elasticity_feat_6a.ii)
+matri_elast_dom <- rbind(tropicana_elasticity_feat_6a.iii, mm_elasticity_feat_6a.iii, dom_elasticity_feat_6a.iii)
+
+matri_elast_trop
+matri_elast_mm
+matri_elast_dom
+```
+
+Problem 6c.
+
+For matrix_elast_trop, tropicana appears to be very inelastic when cross-priced against minute maid and dominicks (0.0316 and -0.3892). This makes sense, since Tropicana is considered to be the luxury brand, its price change in relation to the other brands aren't subject to large change since Tropicana has enough buyers now that would be willing to pay their market price that it wouldn't make sense to deviate.
+
+For matrix_elast_mm, minute maid appears to also be very inelastic when cross-priced against tropicana and dominicks (0.2448 and -0.0240). This is to be expected between minute maid and dominick's, because we've determined from a previous problem that they are competitors with each other.
+
+For matrix_elast_dom, dominicks appears to be elastic when cross-priced with tropicana, but appears to be fairly inelastic when it cross-prices to minute maid. This is to be expected, since Dominick's is the store brand, it will often have sales that will change in relation to other OJ brand prices. In this case, if Tropicana were to increase its price by 1%, it Dominick's price would also have to increase by 1%.
+
+Problem 7a. 
+
+The markups in the leaf with the highest own-price elasticities (the one under matri_elast_trop) should be (1.0000 - 0.244847 = 0.755153%) larger by tropicana than the second own-price matrix (denoted matri_elast_mm), ( 0.3016315 -0.5107588 = -0.2091273%) smaller by minute maid on the second, and (0.02395753-0.1353145 = -0.111357%) smaller by dominick's on the second. For the smallest own-price elasticities matrix, tropicana should decrease its markups by (1.00000 - 0.4213159  = 0.57868%), minute maid should increase its markups by (0.8582828 -0.3016315 = 0.5566513%), and lastly dominick's should decrease its markups by (-0.3892401 + 0.1353145 = -0.2539256%.)
+
+Problem 7b.
+
+They should occur at the same times across stores because if they were to occur at different times, people may feel incentivized to travel to a different Dominick's than they usually would to cash in on a sale when their usual store wouldn't have that deal.

@@ -1,0 +1,418 @@
+---
+title: 'Pset *'
+author: "Henry Tran"
+date: "2023-11-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(xgboost)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(maptree)
+library(readxl)
+library(broom)
+library(tidyverse)
+# oj <- read.csv("oj.use.csv")
+# setwd("C:/Users/danny/Desktop/487 r directory")
+oj <- read.csv("oj.csv")
+retail <- read_excel("online_retail.xlsx")
+```
+
+```{r Problem 2b 3x3 Matrix}
+
+#dont include
+df_trop <- ols.df$brand == "tropicana"
+
+df_trop <- ols.df[df_trop, ]
+
+df_mm <- ols.df$brand == "minute.maid"
+
+df_mm <- ols.df[df_mm, ]
+
+df_dom <- ols.df$brand == "dominicks"
+
+df_dom <- ols.df[df_dom, ]
+
+df_combined <- df_trop
+
+df_combined$logmove.resid.mm <- df_mm$logmove.resid
+df_combined$logmove.resid.dom <- df_dom$logmove.resid
+
+trop_reg <- lm(logmove.resid ~ logmove.resid.mm + logmove.resid.dom, data = df_combined)
+reg_mm <- lm(logmove.resid.mm ~ logmove.resid + logmove.resid.dom, data = df_combined)
+reg_dom <- lm(logmove.resid.dom ~ logmove.resid + logmove.resid.mm, data = df_combined)
+summary(trop_reg) #1trop 2mm 3 dom
+summary(reg_mm) #2trop 1mm 3 dom
+summary(reg_dom) #2trop 3mm 1 dom
+
+trop_elast <- c(summary(trop_reg)$coefficients[1], summary(reg_mm)$coefficients[2], summary(reg_dom)$coefficients[2])
+mm_elast <- c(summary(trop_reg)$coefficients[1], summary(reg_mm)$coefficients[1], summary(reg_dom)$coefficients[3])
+dom_elast <- c(summary(trop_reg)$coefficients[3], summary(reg_mm)$coefficients[3], summary(reg_dom)$coefficients[1])
+
+matrix_elasticity <- rbind(trop_elast, mm_elast, dom_elast)
+print(matrix_elasticity)
+```
+
+```{r Problem 1 oj df lagging}
+#wide dataset mac
+# oj.new <- read_csv('/Users/twojzgte/Desktop/487/oj.use.csv',
+#                    show_col_types = FALSE) %>%
+#   mutate(logprice = log(price))
+
+#wide dataset pc
+oj.new <- oj %>% 
+  mutate(logprice = log(price))
+
+oj.wide <- oj.new %>%
+  select(store, week, brand, logmove, logprice, feat) %>%
+  pivot_longer(logmove:feat) %>%
+  mutate(name = str_c(name, brand, sep = '_')) %>%
+  pivot_wider(id_cols = c(store, week), names_from = name, values_from = value)
+
+oj.use <- oj.new %>% 
+  left_join(oj.wide %>% 
+              mutate(week = week + 1) %>% 
+              rename_with(~(str_c(.x, '_lag_1')), .cols = c(logmove_tropicana:feat_dominicks)),
+            by = c('store', 'week')) %>% 
+  left_join(oj.wide %>%
+              mutate(week = week + 2) %>%
+              rename_with(~(str_c(.x, '_lag_2')), .cols = c(logmove_tropicana:feat_dominicks)),
+            by = c('store', 'week')) %>%
+  left_join(oj.wide %>%
+              mutate(week = week + 3) %>%
+              rename_with(~(str_c(.x, '_lag_3')), .cols = c(logmove_tropicana:feat_dominicks)),
+            by = c('store', 'week')) %>%
+  mutate(brand = factor(brand),
+         week = week - min(week),
+         id = row_number()) %>% 
+  select(-SSTRVOL, -CPWVOL5) %>% 
+  na.omit()
+
+colnames(oj.use)
+```
+
+```{r different df}
+oj.use.trop <- filter(oj.use, oj.use$brand == "tropicana")
+oj.use.dom <- filter(oj.use, oj.use$brand == "dominicks")
+oj.use.mm <- filter(oj.use, oj.use$brand == "minute.maid")
+```
+
+```{r Problem 1 Tropicana rf}
+reg.tree.data.trop <- oj.use.trop %>% 
+  select(logmove, store:feat_tropicana_lag_3)
+
+show_tree.trop <- function(cp_val){
+  fit<-rpart(as.formula(logmove ~  .),
+           data=reg.tree.data.trop,
+           method="anova",
+           cp=cp_val)
+  
+  draw.tree(fit)
+}
+
+show_tree.trop(.07)
+
+fit.trop <- rpart(as.formula(logmove ~ .),
+           data=reg.tree.data.trop,
+           method="anova",
+           cp=.07)
+
+oj.use.trop$leaf = fit.trop$where
+
+leaf1.trop <- oj.use.trop[oj.use.trop$leaf == "3", ]
+leaf2.trop <- oj.use.trop[oj.use.trop$leaf == "4", ]
+leaf3.trop <- oj.use.trop[oj.use.trop$leaf == "5", ]
+```
+
+```{r Problem 1 Dominicks rf}
+reg.tree.data.dom <- oj.use.dom %>% 
+  select(logmove, store:feat_dominicks_lag_3)
+
+show_tree.dom <- function(cp_val){
+  fit<-rpart(as.formula(logmove ~ .),
+           data=reg.tree.data.dom,
+           method="anova",
+           cp=cp_val)
+  
+  draw.tree(fit)
+}
+
+show_tree.dom(.07)
+
+fit.dom <- rpart(as.formula(logmove ~ .),
+           data=reg.tree.data.dom,
+           method="anova",
+           cp=.07)
+
+oj.use.dom$leaf = fit.dom$where
+
+leaf1.dom <- oj.use.dom[oj.use.mm$leaf == "3", ]
+leaf2.dom <- oj.use.dom[oj.use.mm$leaf == "4", ]
+leaf3.dom <- oj.use.dom[oj.use.mm$leaf == "5", ]
+```
+
+```{r Problem 1 Minute maid rf}
+reg.tree.data.mm <- oj.use.mm %>% 
+  select(logmove, store:feat_minute.maid_lag_3)
+
+show_tree.mm <- function(cp_val){
+  fit<-rpart(as.formula(logmove ~ .),
+           data=reg.tree.data.mm,
+           method="anova",
+           cp=cp_val)
+  
+  draw.tree(fit)
+}
+
+show_tree.mm(.07)
+
+fit.mm <- rpart(as.formula(logmove ~ .),
+           data=reg.tree.data.mm,
+           method="anova",
+           cp=.07)
+
+
+oj.use.mm$leaf = fit.mm$where
+
+leaf1.mm <- oj.use.mm[oj.use.mm$leaf == "3", ]
+leaf2.mm <- oj.use.mm[oj.use.mm$leaf == "4", ]
+leaf3.mm <- oj.use.mm[oj.use.mm$leaf == "5", ]
+```
+
+```{r Problem 1 set up rf mm}
+# mm.x1 <- as.matrix(leaf1.mm[, ])
+# sample.mm1 <- sample(1:nrow(mm.x1), 0.5 * nrow(mm.x1), replace = FALSE)
+# mm.1.fold1 <- leaf1.mm[sample.mm1, ]
+# mm.1.fold2 <- leaf1.mm[-sample.mm1, ]
+# 
+# mm.x2 <- as.matrix(leaf2.mm[, ])
+# sample.mm2 <- sample(1:nrow(mm.x2), 0.5 * nrow(mm.x2), replace = FALSE)
+# mm.2.fold1 <- leaf1.mm[sample.mm2, ]
+# mm.2.fold2 <- leaf1.mm[-sample.mm2, ]
+# 
+# mm.x3 <- as.matrix(leaf3.mm[, ])
+# sample.mm3 <- sample(1:nrow(mm.x3), 0.5 * nrow(mm.x3), replace = FALSE)
+# mm.3.fold1 <- leaf1.mm[sample.mm3, ]
+# mm.3.fold2 <- leaf1.mm[-sample.mm3, ]
+```
+
+```{r Problem 1 set up rf mm}
+# mm.leaf1.logmove1 <- model.matrix(formula('logmove ~ '))
+```
+
+```{r problem 1 formula set up}
+logmove.formula <- formula(logmove ~ store + brand + week + feat + price + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + CPDIST5 +
+logprice + logmove_tropicana_lag_1 + logprice_tropicana_lag_1 + feat_tropicana_lag_1 + logmove_minute.maid_lag_1 +
+logprice_minute.maid_lag_1 + feat_minute.maid_lag_1 + logmove_dominicks_lag_1 + logprice_dominicks_lag_1 + feat_dominicks_lag_1 +
+logmove_tropicana_lag_2 + logprice_tropicana_lag_2 + feat_tropicana_lag_2 + logmove_minute.maid_lag_2 + logprice_minute.maid_lag_2 +
+feat_minute.maid_lag_2 + logmove_dominicks_lag_2 + logprice_dominicks_lag_2 + feat_dominicks_lag_2 + logmove_tropicana_lag_3 +
+logprice_tropicana_lag_3 + feat_tropicana_lag_3 + logmove_minute.maid_lag_3 + logprice_minute.maid_lag_3 + feat_minute.maid_lag_3 +
+logmove_dominicks_lag_3 + logprice_dominicks_lag_3 + feat_dominicks_lag_3)
+
+logprice.formula <- formula(logprice ~ store + brand + week + logmove + feat + price + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + CPDIST5 + logmove_tropicana_lag_1 + logprice_tropicana_lag_1 + feat_tropicana_lag_1 + logmove_minute.maid_lag_1 +
+logprice_minute.maid_lag_1 + feat_minute.maid_lag_1 + logmove_dominicks_lag_1 + logprice_dominicks_lag_1 + feat_dominicks_lag_1 +
+logmove_tropicana_lag_2 + logprice_tropicana_lag_2 + feat_tropicana_lag_2 + logmove_minute.maid_lag_2 + logprice_minute.maid_lag_2 +
+feat_minute.maid_lag_2 + logmove_dominicks_lag_2 + logprice_dominicks_lag_2 + feat_dominicks_lag_2 + logmove_tropicana_lag_3 +
+logprice_tropicana_lag_3 + feat_tropicana_lag_3 + logmove_minute.maid_lag_3 + logprice_minute.maid_lag_3 + feat_minute.maid_lag_3 +
+logmove_dominicks_lag_3 + logprice_dominicks_lag_3 + feat_dominicks_lag_3)
+```
+
+```{r problem 1 rf}
+trop.p.1 <- randomForest(logprice.formula, data = leaf1.trop, ntree = 100, keep.forest = TRUE)
+trop.q.1 <- randomForest(logmove.formula, data = leaf1.trop, ntree = 100, keep.forest = TRUE)
+trop.p.2 <- randomForest(logprice.formula, data = leaf2.trop, ntree = 100, keep.forest = TRUE)
+trop.q.2 <- randomForest(logmove.formula, data = leaf2.trop, ntree = 100, keep.forest = TRUE)
+trop.p.3 <- randomForest(logprice.formula, data = leaf3.trop, ntree = 100, keep.forest = TRUE)
+trop.q.3 <- randomForest(logmove.formula, data = leaf3.trop, ntree = 100, keep.forest = TRUE)
+
+mm.p.1 <- randomForest(logprice.formula, data = leaf1.mm, ntree = 100, keep.forest = TRUE)
+mm.q.1 <- randomForest(logmove.formula, data = leaf1.mm, ntree = 100, keep.forest = TRUE)
+mm.p.2 <- randomForest(logprice.formula, data = leaf2.mm, ntree = 100, keep.forest = TRUE)
+mm.q.2 <- randomForest(logmove.formula, data = leaf2.mm, ntree = 100, keep.forest = TRUE)
+mm.p.3 <- randomForest(logprice.formula, data = leaf3.mm, ntree = 100, keep.forest = TRUE)
+mm.q.3 <- randomForest(logmove.formula, data = leaf3.mm, ntree = 100, keep.forest = TRUE)
+
+dom.p.1 <- randomForest(logprice.formula, data = leaf1.dom, ntree = 100, keep.forest = TRUE)
+dom.q.1 <- randomForest(logmove.formula, data = leaf1.dom, ntree = 100, keep.forest = TRUE)
+dom.p.2 <- randomForest(logprice.formula, data = leaf2.dom, ntree = 100, keep.forest = TRUE)
+dom.q.2 <- randomForest(logmove.formula, data = leaf2.dom, ntree = 100, keep.forest = TRUE)
+dom.p.3 <- randomForest(logprice.formula, data = leaf3.dom, ntree = 100, keep.forest = TRUE)
+dom.q.3 <- randomForest(logmove.formula, data = leaf3.dom, ntree = 100, keep.forest = TRUE)
+```
+
+
+```{r Problem 2a XGBoost for Fold 1 & 2}
+
+logmove.fold1 <- model.matrix(formula('logmove.current ~ log.price.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold1)
+
+price.fold1 <- model.matrix(formula('log.price.current ~ logmove.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold1)
+
+logmove.fold2 <- model.matrix(formula('logmove.current ~ log.price.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold2)
+
+price.fold2 <- model.matrix(formula('log.price.current ~ logmove.lagged + feat.lagged + brand + store + week + AGE60 + EDUC + ETHNIC + INCOME + HHLARGE + WORKWOM + HVAL150 + SSTRDIST + SSTRVOL + CPDIST5 + CPWVOL5'), xgb.df.fold2)
+
+#train on fold 1 (og), and test on fold 2
+
+train_xgb.fold1 <- xgb.DMatrix(data = logmove.fold1, label = xgb.df.fold1$logmove.current)
+
+test_xgb.fold1 <- xgb.DMatrix(data = logmove.fold2, label = xgb.df.fold1$log.price.current)
+
+train_xgb.fold2 <- xgb.DMatrix(data = logmove.fold2, label = xgb.df.fold2$logmove.current)
+
+test_xgb.fold2 <- xgb.DMatrix(data = logmove.fold1, label = xgb.df.fold1$log.price.current)
+
+cv.xgb.1 <- xgb.cv(data = train_xgb.fold1, nfold = 5, nrounds = 10000000, early_stopping_rounds = 10, print_every_n = 100)
+cat("For the prediction for fold1, we will use", cv.xgb.1$best_iteration, "rounds to train this fold (1)")
+
+cv.xgb.2 <- xgb.cv(data = train_xgb.fold2, nfold = 5, nrounds = 10000000, early_stopping_rounds = 10, print_every_n = 100)
+cat("For the prediction for fold2, we will use", cv.xgb.2$best_iteration, "rounds to train this fold (2)")
+```
+
+```{r Problem 2a Prediction}
+full.test.fold1 <- xgboost(data = train_xgb.fold1, nrounds = cv.xgb.1$best_iteration, print_every_n = 100)
+
+full.test.fold2 <- xgboost(data = train_xgb.fold2, nrounds = cv.xgb.2$best_iteration, print_every_n = 100)
+
+predicted.1 <- predict(full.test.fold1, newdata = test_xgb.fold2)
+
+predicted.2 <- predict(full.test.fold2, newdata = test_xgb.fold1)
+
+log.price.resid <- df2$log.price.current - predicted.1
+
+logmove.resid <- df2$logmove.current - predicted.2
+
+resid.combined <- rbind(log.price.resid, logmove.resid)
+
+resid.combined <- t(resid.combined)
+
+resid.combined <- na.omit(resid.combined)
+
+sampled.df.combined <- rbind(xgb.df.fold1, xgb.df.fold2)
+
+ols.df <- cbind(sampled.df.combined, resid.combined)
+```
+
+```{r Problem 2a OLS}
+logprice.ols <- lm(log.price.resid ~ logmove.resid + logmove.resid*brand + logmove.resid*feat.lagged + brand + brand*feat.lagged + EDUC + AGE60 + ETHNIC + INCOME + ETHNIC * INCOME * AGE60, data = ols.df)
+summary(logprice.ols)
+
+logmove.ols <- lm(logmove.resid ~ log.price.resid + log.price.resid*brand + log.price.resid*feat.lagged + brand + brand*feat.lagged + EDUC + AGE60 + ETHNIC + INCOME + ETHNIC * INCOME * AGE60, data = ols.df)
+summary(logmove.ols)
+```
+
+```{r elasticity matrix}
+oj_with_residuals_wide <- reg_data %>% 
+  pivot_wider(id_cols = c(store,week), names_from = brand, values_from = c(q_resid,p_resid))
+
+cross_logprice_elasticity_matrix <- function(df){
+  bind_rows(
+    lapply(unique(oj$brand), function(x){
+      lm(
+        formula(
+          str_c(
+            str_interp('q_resid_${x} ~ '),
+            str_c(str_c('p_resid_', unique(oj$brand)), collapse = ' + ')
+          )
+        ),
+        data = df
+      ) %>% 
+        tidy() %>% 
+        filter(str_detect(term, 'p_resid')) %>% 
+        mutate(q = x) %>% 
+        select(q, term, estimate) %>% 
+        pivot_wider(id_cols = q, names_from = term, values_from = estimate)
+    })
+  )
+}
+
+cross_logprice_elasticity_matrix(oj_with_residuals_wide) %>% 
+  kable()
+
+```
+
+```{r Problem 2a Setting up Training and Test sets}
+x <- as.matrix(df2[, ])
+
+sample.2 <- sample(1:nrow(x), 0.5 * nrow(x), replace = FALSE)
+xgb.df.fold1 <- df2[sample.2, ]
+xgb.df.fold2 <- df2[-sample.2, ]
+```
+
+```{r Problem 3}
+retail <- read_excel("online_retail.xlsx")
+```
+
+```{r Problem 3}
+colnames(retail)
+
+#unique customers
+num.customers <- length(unique(retail$CustomerID))
+cat("There are", num.customers, "unique customers in the dataset")
+
+#unique countries
+num.countries <- length(unique(retail$Country))
+cat("There are", num.countries, "unique countries in the dataset")
+
+#total revenue by country
+countries_order <- c(
+  "United Kingdom", "Iceland", "Finland", "Italy", "Norway", "Bahrain", "Spain",
+  "Portugal", "Switzerland", "Austria", "Cyprus", "Belgium", "Unspecified",
+  "Denmark", "Australia", "France", "Germany", "RSA", "Greece", "Sweden", "Israel",
+  "USA", "Saudi Arabia", "Poland", "United Arab Emirates", "Singapore", "Japan",
+  "Netherlands", "Lebanon", "Brazil", "Czech Republic", "EIRE", "Channel Islands",
+  "European Community", "Lithuania", "Canada", "Malta", "Hong Kong"
+)
+
+result_df <- data.frame(Country = character(), MaxRunningTotal = numeric(), stringsAsFactors = FALSE)
+
+for (country in countries_order) {
+  total_rev_country <- retail %>%
+    filter(Country == country) %>%
+    mutate(RunningTotal = cumsum(UnitPrice))
+
+  max_running_total <- max(total_rev_country$RunningTotal)
+
+  result_df <- bind_rows(result_df, data.frame(Country = country, MaxRunningTotal = max_running_total))
+}
+
+print(result_df)
+
+max(result_df$MaxRunningTotal)
+
+cat("The country with the highest total revenue is the United Kingdom")
+
+#average rev by customer per country
+
+retail <- retail %>%
+    group_by(Country) %>%
+    summarise(numcomstomers = n_distinct(CustomerID))
+
+
+n_rows <- nrow(retail)
+counts <- data.frame(InvoiceNo = character(), Country = character(), Count = integer(), stringsAsFactors = FALSE)
+
+for (i in 1:n_rows) {
+  current_invoice_id <- retail$InvoiceNo[i]
+  current_country <- retail$Country[i]
+  
+  # Check if the current row's InvoiceID and Country match the previous row
+  if (i > 1 &&
+      current_invoice_id == retail$InvoiceNo[i - 1] &&
+      current_country == retail$Country[i - 1]) {
+    # If yes, increment the count
+    counts$Count[nrow(counts)] <- counts$Count[nrow(counts)] + 1
+  } else {
+    # If no, add a new row to counts with count = 1
+    counts <- rbind(counts, data.frame(InvoiceNo = current_invoice_id, Country = current_country, Count = 1))
+  }
+}
+
+# Print the result
+print(counts)
+
+
+```
+
